@@ -70,6 +70,7 @@ V2_VARIANTS = {
     "lq_dq_al": (True, True, True, False),
     "dqevdr2":  (True, True, True, True),
     "lq_al":    (True, False, True, False),
+    "lq_al_trap": (True, False, True, True),
 }
 
 
