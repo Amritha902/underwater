@@ -24,3 +24,20 @@ def test_paper_sim_runs_and_delay_matches_holding_time_model():
         r = Sim(c, proto, seed=0).run()
         assert 0 < r["pdr"] <= 1, proto
         assert 0.3 < r["delay_s"] < 1.5, proto
+
+
+def test_v2_variants_and_adaptive_list():
+    import numpy as np
+    from uwsim.paper_sim import Sim, PaperConfig, V2_VARIANTS
+    c = PaperConfig(n_sensors=150, rounds=15)
+    for proto in V2_VARIANTS:
+        r = Sim(c, proto, seed=0).run()
+        assert 0 < r["pdr"] <= 1 and not np.isnan(r["v_bias"]), proto
+    sim = Sim(c, "dqevdr2", seed=0)
+    s = next(i for i in range(sim.N) if not sim.is_sink[i] and (sim.adj[i] & (sim.depth < sim.depth[i])).sum() >= 3)
+    sim.P[0][:] = 0.995
+    sim.P[1][:] = 0.995
+    assert len(sim._priority_list(s)) == 1          # one 0.995 link already meets rho = 0.99
+    sim.P[0][:] = 0.5
+    sim.P[1][:] = 0.5
+    assert len(sim._priority_list(s)) >= 3          # weak links need more candidates

@@ -53,6 +53,22 @@ class PaperConfig:
     # DQ-EVDR (ours)
     w_link: float = 1.0
     void_cost: float = 1.0
+    # DQ-EVDR v2 (ours)
+    w_lq: float = 0.25             # weight of learned link-quality cost (1 - p_hat); tuned on seeds 100-102
+    w_trap: float = 1.0            # weight of learned trap-node cost; tuned on seeds 100-102
+    lq_beta: float = 0.2           # EWMA rate for p_hat / trap estimates
+    lq_prior: float = 0.9          # prior link success before any sample
+    rho: float = 0.99              # per-hop reliability target for adaptive list length; tuned
+
+
+# Ablation variants: protocol name -> (link quality, double Q, adaptive list, trap penalty)
+V2_VARIANTS = {
+    "lq":       (True, False, False, False),
+    "lq_dq":    (True, True, False, False),
+    "lq_dq_al": (True, True, True, False),
+    "dqevdr2":  (True, True, True, True),
+    "lq_al":    (True, False, True, False),
+}
 
 
 def thorp_db_per_km(f):
@@ -92,6 +108,16 @@ class Sim:
             self.V[:] = cfg.v_init
             self.V[N:] = 0.0
         self.list_len = c.list_len0
+        self.v2 = V2_VARIANTS.get(protocol)
+        if self.v2:
+            self.P = [np.full((self.N, self.N), c.lq_prior), np.full((self.N, self.N), c.lq_prior)]
+            self.F = np.zeros(self.N)                    # learned trap (no-progress) rate per node
+            self.awaiting = {}
+            self.n_samples = 0
+            self.txseq = np.zeros(self.N, int)               # per-node transmission counter (in header)
+            self.last_seq = np.full((self.N, self.N), -1)    # last seq heard by row-node from col-node
+            self.Qo = np.zeros((self.N, self.N))               # oracle twin (true p, same schedule)
+            self.Vo = np.zeros(self.N)
         self.gen = 0
         self.delivered = {}
         self.tx_count = 0
@@ -106,6 +132,8 @@ class Sim:
         self.adj = (self.dist <= c.R) & ~np.eye(self.N, dtype=bool)
         self.p = link_success(self.dist, c)
         self.depth = self.pos[:, 2].copy()
+        if getattr(self, "v2", None):
+            self.last_seq[~self.adj] = -1                  # neighbour timeout: forget lost links
         if self.proto == "dvor":
             self._hop_counts()
 
@@ -186,6 +214,8 @@ class Sim:
             avg = 0.5 * (self.Q + self.Q2)
             self.V = np.where(A.any(1), np.where(A, avg, -np.inf).max(1), self.V)
             self.V[self.is_sink] = 0.0
+        elif self.v2:
+            self._update_q_v2(A)
         elif self.proto == "qelar":
             # QELAR (Hu & Fei 2010): r = -g - a1[c(s)+c(sj)] + a2[d(s)+d(sj)],
             # d(s) = (2/pi) arctan(E_res(s) - mean neighbour E_res); Q uses link success p.
@@ -202,6 +232,77 @@ class Sim:
                 self.V = np.where(A.any(1), masked.max(1), self.V)
                 self.V[self.is_sink] = 0.0
 
+    def _v2_reward(self, est):
+        c = self.cfg
+        lq, dq, al, trap = self.v2
+        r = self._qlfr_reward() - c.w_lq * (1 - self.P[est])
+        if trap:
+            r = r - c.w_trap * self.F[None, :]
+        return r
+
+    def _update_q_v2(self, A):
+        c = self.cfg
+        lq, dq, al, trap = self.v2
+        # oracle twin: identical update schedule, noise-free link term (true p)
+        ro = self._qlfr_reward() - c.w_lq * (1 - self.p) - (c.w_trap * self.F[None, :] if trap else 0)
+        self.Qo = np.where(A, c.alpha * (ro + c.gamma * self.Vo[None, :]) + (1 - c.alpha) * self.Qo, self.Qo)
+        self.Vo = np.where(A.any(1), np.where(A, self.Qo, -np.inf).max(1), self.Vo)
+        self.Vo[self.is_sink] = 0.0
+        if not dq:
+            target = self._v2_reward(0) + c.gamma * self.V[None, :]
+            self.Q = np.where(A, c.alpha * target + (1 - c.alpha) * self.Q, self.Q)
+            masked = np.where(A, self.Q, -np.inf)
+            self.V = np.where(A.any(1), masked.max(1), self.V)
+        else:
+            # Double Q-learning: estimator a uses its own link samples; next-state value is
+            # argmax under Q_a evaluated with Q_b (removes max-operator overestimation).
+            for a in (0, 1):
+                Qa, Qb = (self.Q, self.Q2) if a == 0 else (self.Q2, self.Q)
+                arg = np.argmax(np.where(A, Qa, -np.inf), axis=1)
+                v_eval = np.where(A.any(1), Qb[np.arange(self.N), arg], 0.0)
+                v_eval[self.is_sink] = 0.0
+                target = self._v2_reward(a) + c.gamma * v_eval[None, :]
+                new = np.where(A, c.alpha * target + (1 - c.alpha) * Qa, Qa)
+                if a == 0:
+                    self.Q = new
+                else:
+                    self.Q2 = new
+            # Double-estimator value: argmax under one table, evaluated with the other
+            ia = np.argmax(np.where(A, self.Q, -np.inf), axis=1)
+            ib = np.argmax(np.where(A, self.Q2, -np.inf), axis=1)
+            rows = np.arange(self.N)
+            vd = 0.5 * (self.Q2[rows, ia] + self.Q[rows, ib])
+            self.V = np.where(A.any(1), vd, self.V)
+        self.V[self.is_sink] = 0.0
+
+    def _p_hat(self, s, nb):
+        lq, dq, al, trap = self.v2
+        return 0.5 * (self.P[0][s, nb] + self.P[1][s, nb]) if dq else self.P[0][s, nb]
+
+    def _learn_link(self, s, j, ok):
+        lq, dq, al, trap = self.v2
+        e = int(self.rng.integers(2)) if dq else 0            # Double: each sample feeds one estimator
+        P = self.P[e]
+        P[s, j] += self.cfg.lq_beta * (ok - P[s, j])
+        P[j, s] = P[s, j]
+        self.n_samples += 1
+
+    def _learn_trap(self, s, failed):
+        self.F[s] += self.cfg.lq_beta * (float(failed) - self.F[s])
+
+    def _ack_check(self, t, s, pkt):
+        st = self.awaiting.pop((s, pkt), None)
+        if st is None:
+            return
+        plist, h = st["plist"], st["heard"]
+        self._learn_trap(s, not (h is not None and h in plist))
+
+    def bias_vs_oracle(self):
+        """Mean (learned V - oracle-twin V) over sensors: estimation bias caused by noisy link estimates."""
+        A = self.adj & ~self.is_sink[:, None]
+        sens = ~self.is_sink & A.any(1)
+        return float(np.mean(self.V[sens] - self.Vo[sens]))
+
     def _void_mask(self):
         shallower = self.adj & (self.depth[None, :] < self.depth[:, None])
         return (~shallower.any(1)) & ~self.is_sink
@@ -210,8 +311,16 @@ class Sim:
         nb = np.nonzero(self.adj[s] & (self.depth < self.depth[s]))[0]
         if nb.size == 0:
             return []
-        q = self.Q[s, nb] if self.proto == "qlfr" else 0.5 * (self.Q[s, nb] + self.Q2[s, nb])
+        dq = self.v2[1] if self.v2 else self.proto == "dqevdr"
+        q = 0.5 * (self.Q[s, nb] + self.Q2[s, nb]) if dq else self.Q[s, nb]
         order = nb[np.argsort(-q)]
+        if self.v2 and self.v2[2]:
+            # adaptive list: smallest L with 1 - prod(1 - p_hat) >= rho
+            rel = 1 - np.cumprod(1 - np.clip(self._p_hat(s, order), 0, 1))
+            ok = rel >= self.cfg.rho
+            L = int(np.argmax(ok)) + 1 if ok.any() else order.size
+            L = max(1, min(L, self.cfg.list_len_max, order.size))
+            return list(order[:L])
         return list(order[: self.list_len])
 
     # ----------------------------------------------------------- event engine
@@ -222,6 +331,9 @@ class Sim:
         """s broadcasts pkt at time t. Energy per Eq. (33)-(36)."""
         self._spend(s, self.cfg.psi_t * self.t_pkt)
         self.tx_count += 1
+        if self.v2:
+            self.txseq[s] += 1
+            info = dict(info, seq=int(self.txseq[s]))
         for j in np.nonzero(self.adj[s])[0]:
             self._spend(j, self.cfg.psi_r * self.t_pkt)
             if self.rng.random() < self.p[s, j]:
@@ -234,6 +346,21 @@ class Sim:
 
     def _recv(self, t, j, s, pkt, info):
         st = self.state.setdefault(pkt, {"forwarded": set(), "held": {}})
+        if self.v2:
+            # ETX-style link estimate from sequence-number gaps (links assumed symmetric)
+            last = self.last_seq[j, s]
+            if last >= 0:
+                for _ in range(min(info["seq"] - last - 1, 5)):
+                    self._learn_link(j, s, 0)
+                self._learn_link(j, s, 1)
+            self.last_seq[j, s] = info["seq"]
+            aw = self.awaiting.get((j, pkt))                # j overhears its candidate s forwarding
+            if aw is not None and aw["heard"] is None and s in aw["plist"]:
+                aw["heard"] = s
+            if self.is_sink[j]:
+                aw_s = self.awaiting.get((s, pkt))          # sink acknowledges over its radio link
+                if aw_s is not None and aw_s["heard"] is None and j in aw_s["plist"]:
+                    aw_s["heard"] = j
         if j in st["held"]:
             st["held"][j]["cancel"] = True                  # overheard during holding time
         if self.is_sink[j]:
@@ -253,7 +380,7 @@ class Sim:
 
     def _hold(self, j, s, pkt, info):
         c = self.cfg
-        if self.proto in ("qlfr", "dqevdr"):
+        if self.proto in ("qlfr", "dqevdr") or self.v2:
             pl = info.get("plist", [])
             if j not in pl:
                 return None                                  # Alg. 1 lines 4-5
@@ -287,10 +414,16 @@ class Sim:
 
     def _send(self, t, s, pkt, attempt=0):
         info = {}
-        if self.proto in ("qlfr", "dqevdr"):
+        if self.proto in ("qlfr", "dqevdr") or self.v2:
             info["plist"] = self._priority_list(s)
             if not info["plist"]:
+                if self.v2:
+                    self._learn_trap(s, True)               # void: no shallower neighbour
                 return
+            if self.v2:
+                pl = info["plist"]
+                self.awaiting[(s, pkt)] = {"plist": pl, "heard": None}
+                self._sched(t + self.cfg.k * len(pl) + 2 * self.cfg.R / V0 + 1e-3, self._ack_check, s, pkt)
         if self.proto == "qelar":
             nb = np.nonzero(self.adj[s])[0]
             if nb.size == 0:
@@ -328,6 +461,9 @@ class Sim:
                 t, _, fn, a = heapq.heappop(self.q)
                 fn(t, *a)
             self.q.clear()
+            if self.v2:
+                for (s_, p_) in list(self.awaiting):
+                    self._ack_check(t_start + c.round_s, s_, p_)
             # multipath suppression scheme (Sec. IV-D, Fig. 4): adapt list length from sink PDR
             pdr = len(self.delivered) / self.gen
             if pdr > c.pdr_th:
@@ -348,4 +484,5 @@ class Sim:
             "energy_j": float(self.used[sensors].sum()),
             "lifetime_s": lifetime,
             "tx_per_pkt": self.tx_count / self.gen,
+            "v_bias": self.bias_vs_oracle() if self.v2 else float("nan"),
         }
