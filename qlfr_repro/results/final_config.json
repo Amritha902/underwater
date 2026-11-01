@@ -1,0 +1,3 @@
+{"name": "LAQR (rho=0.98)", "protocol": "lq_al", "beta": 0.05, "rho": 0.98,
+ "alt_name": "LAQR-HR (rho=0.99)", "alt_rho": 0.99,
+ "selected_by": "tune_final.py on seeds 100-104: feasible = dPDR >= -0.005 vs QLFR(P_th=0.90) on sigma 0/4/8 dB; max mean lifetime ratio"}

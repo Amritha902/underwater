@@ -43,14 +43,14 @@ for sd, NN in SCEN:
                    f"{st.mean(lr):.2f} ± {ci(lr):.2f} | {st.mean(er):.2f} ± {ci(er):.2f} |")
 open("results/final_summary.md", "w").write("\n".join(out) + "\n")
 
-COL = {LABS[0]: "#6C757D", LABS[1]: "#ADB5BD", LABS[2]: "#0072B2", LABS[3]: "#009E73"}
+COL = {LABS[0]: "#6C757D", LABS[1]: "#ADB5BD", LABS[2]: "#0072B2", LABS[3]: "#E69F00", LABS[4]: "#009E73"}
 fig, axs = plt.subplots(3, 3, figsize=(14, 10))
 for i, (sd, NN) in enumerate(SCEN):
     for ax, (k, name) in zip(axs[i], (("pdr", "PDR"), ("delay_s", "Delay (s)"), ("lifetime_s", "Lifetime (s)"))):
         for lab in LABS:
             v = [[float(x[k]) for x in D[(sd, lab, n)].values()] for n in NN]
             ax.errorbar(NN, [st.mean(x) for x in v], yerr=[ci(x) for x in v], label=lab, color=COL[lab],
-                        marker="o", ms=3, capsize=2, lw=2.4 if lab == FINAL["name"] else 1.2)
+                        marker="o", ms=3, capsize=2, lw=2.4 if lab.startswith("LAQR") else 1.2)
         ax.set_title(f"σ = {sd:g} dB: {name}", fontsize=10)
         ax.set_xlabel("Number of nodes")
         ax.grid(alpha=0.3)

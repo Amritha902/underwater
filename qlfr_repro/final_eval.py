@@ -14,6 +14,7 @@ PROTOS = [
     ("QLFR (P_th=0.90)", "qlfr", {}),
     ("QLFR (P_th=0.97)", "qlfr", {"pdr_th": 0.97}),
     ("DQ-EVDR v2", "dqevdr2", {}),
+    (FINAL["alt_name"], FINAL["protocol"], {"lq_beta": FINAL["beta"], "rho": FINAL["alt_rho"]}),
     (FINAL["name"], FINAL["protocol"], {"lq_beta": FINAL["beta"], "rho": FINAL["rho"]}),
 ]
 
