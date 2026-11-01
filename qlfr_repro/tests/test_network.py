@@ -13,3 +13,14 @@ def test_deterministic_given_seed():
     a = Network(Config(), 150, "dqevdr", seed=7).run(40, 20)
     b = Network(Config(), 150, "dqevdr", seed=7).run(40, 20)
     assert a == b
+
+
+def test_paper_sim_runs_and_delay_matches_holding_time_model():
+    from uwsim.paper_sim import Sim, PaperConfig, link_success
+    import numpy as np
+    c = PaperConfig(n_sensors=150, rounds=20)
+    assert 0.85 < float(link_success(np.array(150.0), c)) < 0.92
+    for proto in ("dbr", "eedbr", "dvor", "qlfr", "qelar", "dqevdr"):
+        r = Sim(c, proto, seed=0).run()
+        assert 0 < r["pdr"] <= 1, proto
+        assert 0.3 < r["delay_s"] < 1.5, proto

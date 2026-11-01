@@ -1,160 +1,162 @@
-# Base-Paper Re-implementation Report: QLFR
+# Base Paper Re-implementation: QLFR (Paper vs Ours)
 
-**Date:** 31 Oct 2026. **Code:** `qlfr_repro/` (Python; `python3 experiments.py && python3 plots.py` regenerates everything).
+**Date:** 1 Nov 2026. **Code:** `qlfr_repro/` (Python).
 
-## 1. Base paper chosen
+**Base paper:** Y. Zhou, T. Cao, W. Xiang, "Anypath Routing Protocol Design via Q-Learning for Underwater Sensor Networks," *IEEE Internet of Things Journal*, 8(10), 8173–8190, 2021. doi:10.1109/JIOT.2020.3042901. The re-implementation follows the arXiv:2002.09623v1 full text (16 pages, read in full).
 
-Y. Zhou, T. Cao, W. Xiang, "Anypath Routing Protocol Design via Q-Learning for Underwater Sensor Networks," *IEEE Internet of Things Journal*, vol. 8, no. 10, pp. 8173–8190, 2021. doi:10.1109/JIOT.2020.3042901. Preprint: arXiv:2002.09623.
+## 1. Summary
 
-**Why this paper:**
-- It has the highest relevance score (95%) in our 50-paper survey, tied with QTRU (EAAI 2025).
-- It uses depth- and energy-related rewards, a ranked forwarding-candidate set and priority-based holding times: exactly the building blocks of our DQ-EVDR.
-- Its full text is open on arXiv, so its equations and figures can be matched. QTRU is more recent but paywalled.
-- None of the 50 surveyed papers publishes Python code, so a re-implementation from the paper's description was required in every case.
-
-## 2. What could and could not be verified
-
-| Item | Status |
-|---|---|
-| Protocol design elements (from the abstract): Q-learning; depth- and energy-related rewards; anypath candidate set; holding time set by candidate priority; overhearing suppression; localization-free (depth only) | Implemented |
-| Exact reward equations, weights, holding-time formula constants | **Not available.** arxiv.org is blocked in this environment, and web search returns only the abstract and section headings. Our own documented choices were used (Section 4). |
-| Paper's simulation parameters (area, node counts, range, energy, packet size) | **Not available.** Documented assumptions were used (Section 4). |
-| Paper's figures and numerical results | **Not available.** No paper numbers are reproduced or invented here. Section 7 is a ready table to fill in. |
-| Paper's qualitative claims: QLFR "reduces end-to-end delay" and "extends network lifetime" against baselines | **Checked against our results** (Section 6) |
-
-To finish the numeric match, allow `arxiv.org` in the environment's network settings or upload the PDF. Then:
-1. Copy the paper's parameters into `uwsim/config.py`.
-2. Replace the reward and holding-time functions with the paper's equations (`_reward`, `_q`, `_holding_time` in `uwsim/network.py`).
-3. Re-run the two scripts and fill in Section 7.
-
-## 3. What was implemented
-
-| Module | Contents |
-|---|---|
-| `uwsim/channel.py` | Thorp absorption (dB/km), spreading loss with k = 1.5, sound speed 1500 m/s. Hand-checked: 1.187 dB/km at 10 kHz and 6.105 dB/km at 25 kHz. |
-| `uwsim/phy.py` | SNR = SL − TL − NL; BPSK bit error rate; packet success = (1 − BER)^bits |
-| `uwsim/energy.py`, `topology.py`, `engine.py`, `metrics.py` | Battery model, random 3-D deployment with sinks on the surface, discrete-event engine, metrics |
-| `uwsim/network.py` | The four protocols below |
-
-| Protocol | Implementation |
-|---|---|
-| **DBR** (Yan et al., 2008) | A receiver forwards if it is shallower than the sender. Holding time = (2τ/δ)(R − Δd), with τ = R/c and δ = R. A held copy is cancelled when a shallower forwarder is overheard. |
-| **VBF** (Xie et al., 2006) | Forward only inside a pipe of radius W = 150 m around the source-to-sink vector. Desirableness α = p/W + (R − d·cosθ)/R. Holding time = √α·T + (R − d)/c. |
-| **QLFR** (base paper, abstract-level) | **Reward:** r = −1 + w_d·Δdepth/R + w_e·(E_res/E_0 − 1), i.e. a depth term plus an energy term. **Q-value:** Q_s(j) = r + γ[P̂_sj·V_j + (1 − P̂_sj)(V_s − c_fail)]. **Advertised value:** V_s = max_j Q_s(j). **Candidates:** the top-3 by Q, with holding time = rank × slot; lower-ranked copies are suppressed on overhearing. **Learning:** link success P̂ and neighbour values V are learned from implicit acknowledgements (overhearing the next hop). |
-| **DQ-EVDR** (ours) | The same machinery, plus two changes: **(i) Double Q-learning:** two independent estimators; each sample updates one at random; V_s = ½[Q^B(argmax Q^A) + Q^A(argmax Q^B)]. **(ii) Void penalty:** a candidate with no shallower neighbour is penalised in the reward. |
-
-**Simplifications** (applied equally to all protocols):
-- No MAC collisions.
-- Idle energy is ignored.
-- Sinks acknowledge receptions reliably.
-- Up to 2 retransmissions for the Q-learning protocols.
-
-**Tests:** 8 unit tests pass (`python3 -m pytest -q tests`). They cover the channel values, battery, topology symmetry, event order, delivery for every protocol, and determinism given a seed.
-
-## 4. Simulation parameters (documented assumptions)
-
-| Parameter | Value |
-|---|---|
-| Area | 1000 × 1000 × 1000 m |
-| Sinks | 9 (random, at the surface) |
-| Sensors | 100, 150, 200, 250, 300, 400, 500 |
-| Communication range R | 250 m |
-| Frequency | 25 kHz |
-| Source level / noise level | 95 dB / 50 dB (link success: 0.98 at 200 m, 0.73 at 250 m) |
-| Packet | 800 bits at 16 kbit/s (0.05 s) |
-| Tx / Rx power | 2 W / 0.1 W |
-| Initial energy | 100 J (15 J in the lifetime test) |
-| Traffic | 400 packets, one every 20 s from a random sensor |
-| Q-learning | α = 0.5, γ = 0.9, w_d = w_e = 1, hop cost = 1, failure penalty = 2, sink value = 5, 3 candidates |
-| DQ-EVDR void penalty | 3 |
-| Seeds | 5 per point; error bars are 95% confidence intervals (t-distribution) |
-
-## 5. Figures (produced by our code)
-
-| Figure | Content |
-|---|---|
-| `qlfr_repro/figures/fig1_pdr.png` | Packet delivery ratio vs node count |
-| `qlfr_repro/figures/fig2_delay_s.png` | Average end-to-end delay vs node count |
-| `qlfr_repro/figures/fig3_energy_per_pkt_j.png` | Energy per delivered packet (log scale) |
-| `qlfr_repro/figures/fig4_transmissions_per_pkt.png` | Transmissions per generated packet (log scale) |
-| `qlfr_repro/figures/fig5_lifetime.png` | Packets generated before the first node dies (300 nodes, 15 J) |
-| `qlfr_repro/figures/fig6_learning.png` | Learning curve: windowed delivery ratio, QLFR vs DQ-EVDR |
-
-## 6. Results and check against QLFR's claims
-
-### 6.1 Packet delivery ratio (mean ± 95% CI)
-
-| Nodes | DBR | VBF | QLFR | DQ-EVDR |
-|---|---|---|---|---|
-| 100 | 0.745 ± 0.180 | 0.326 ± 0.104 | 0.766 ± 0.187 | 0.747 ± 0.186 |
-| 150 | 0.880 ± 0.040 | 0.531 ± 0.110 | 0.901 ± 0.039 | 0.883 ± 0.039 |
-| 200 | 0.957 ± 0.031 | 0.620 ± 0.109 | 0.960 ± 0.040 | 0.959 ± 0.036 |
-| 300 | 0.982 ± 0.021 | 0.847 ± 0.038 | 0.981 ± 0.026 | 0.974 ± 0.033 |
-| 500 | 0.992 | 0.962 | 0.986 | 0.990 |
-
-The full tables for all densities and metrics are in `qlfr_repro/results/summary.md`.
-
-### 6.2 Delay, energy and transmissions (means; see summary.md for CIs)
-
-| Nodes | Delay (s): DBR / QLFR | Energy per packet (J): DBR / QLFR | Transmissions per packet: DBR / QLFR |
-|---|---|---|---|
-| 100 | 1.095 / 0.885 | 2.64 / 1.53 | 15.6 / 9.2 |
-| 300 | 0.826 / 0.789 | 14.20 / 2.71 | 80.5 / 15.7 |
-| 500 | 0.752 / 0.742 | 27.89 / 2.46 | 128.0 / 11.7 |
-
-### 6.3 Lifetime (300 nodes, 15 J batteries)
-
-| Protocol | Packets before first node death |
-|---|---|
-| DBR | 103.2 ± 6.7 |
-| VBF | 536.4 ± 166.1 |
-| QLFR | 191.8 ± 52.6 |
-| DQ-EVDR | 189.6 ± 68.6 |
-
-### 6.4 Trend check against the paper's stated claims
-
-| QLFR claim (from abstract) | Our re-implementation | Consistent? |
+| Paper figure | What it shows | Match |
 |---|---|---|
-| Reduces end-to-end delay compared with baseline routing | QLFR's delay is lower than DBR's at all 7 densities (e.g. 0.885 vs 1.095 s at 100 nodes) | Yes vs DBR. VBF has lower delay only at 100 nodes, where it delivers just 33% of packets. |
-| Extends network lifetime | QLFR survives 1.86× longer than DBR (191.8 vs 103.2 packets); it uses 5–11× less energy per packet at 300–500 nodes | Yes vs DBR. VBF lasts longer because it forwards far less, but at a much lower delivery ratio (0.33–0.96). |
-| Keeps delivery high with only depth information | QLFR's delivery ratio is within the confidence interval of DBR (flooding-like) at every density | Yes |
+| Fig. 6: end-to-end delay vs nodes | QLFR lowest; DBR falls with density | **Strong.** QLFR is within 0.005–0.022 s of the paper at all 9 densities; DBR within 0.06 s. |
+| Fig. 10: delay vs k | Larger k gives longer delay | **Strong.** Same ordering; ours is within 0.005–0.04 s. |
+| Fig. 14: delay vs node speed | Speed has little impact | **Good.** Within 0.05 s everywhere. v = 1 m/s is within 0.01 s at 200–500 nodes; v = 5 m/s runs 0.03–0.04 s higher. |
+| Fig. 7: lifetime vs nodes | QLFR rises with density; DBR, EEDBR and DVOR fall | **Partial.** Same direction for QLFR, DBR and EEDBR. QLFR rises 1.36× (paper 2.36×). Our DVOR stays above QLFR up to 150 nodes. |
+| Fig. 12: energy vs k | Smaller k uses more energy; energy grows with N | **Qualitative.** Same ordering and growth; our growth is steeper. |
+| Fig. 15: energy vs speed | Energy rises slightly with speed | **Qualitative.** Same ordering; our rise is steeper. |
+| Fig. 8: PDR vs nodes | QLFR about 2–3% below DBR, EEDBR and DVOR | **Partial.** QLFR is below DBR and EEDBR, but at 0.90 rather than 0.97. Section 6 explains why. |
+| Fig. 11 / Fig. 13: PDR vs k and vs speed | Small differences | **Partial.** Ours is held at about 0.90 by the threshold parameter. |
+| Fig. 9: QLFR vs QELAR | QLFR delay ≈ 0.73–0.78 × QELAR | **Delay matches** (0.73 vs paper 0.73–0.78). **Lifetime does not** (0.28–0.32 vs paper 0.80–0.92); our QELAR is an approximation. |
 
-**Conclusion:**
-- Our Python re-implementation reproduces the *qualitative* behaviour QLFR claims.
-- *Numeric* agreement with the paper's figures cannot be shown until the full text is accessible (Section 7).
+**Bottom line:** the core protocol (Q-values, priority list, holding time) reproduces the paper's delay results almost exactly, and the main lifetime trend. Remaining gaps trace to parameters the paper does not report (Section 4) and to baselines that could only be approximated without their own papers.
 
-### 6.5 First result for our proposal (DQ-EVDR vs QLFR, paired by seed)
+## 2. Implemented exactly as specified in the paper
 
-| Nodes | ΔPDR | ΔDelay (s) | ΔEnergy per packet (J) |
-|---|---|---|---|
-| 100 | −0.019 ± 0.034 | −0.006 ± 0.072 | −0.013 ± 0.191 |
-| 150 | −0.018 ± 0.016 | −0.033 ± 0.061 | −0.085 ± 0.227 |
-| 250 | +0.004 ± 0.010 | −0.031 ± 0.034 | −0.043 ± 0.455 |
-| 500 | +0.004 ± 0.014 | −0.014 ± 0.031 | −0.136 ± 0.412 |
+| Component | Paper source | Implementation (`uwsim/paper_sim.py`) |
+|---|---|---|
+| Reward | Eq. (5)–(7): r = −c_e(s_i) − c_e(s_j) − c_d(s_i,s_j); c_e = 1 − e_res/e_ini; c_d = ½(1 − d(s_i,s_j)/\|d\|max) | `_qlfr_reward` (\|d\|max = R) |
+| Q-update | Eq. (8): Q ← α[r + γV(s_j)] + (1 − α)Q, V = max Q, γ = 0.8 | `_update_q`, once per packet round for all neighbours (Alg. 1, line 10) |
+| Priority list | Sec. IV-A, V-C: shallower neighbours sorted by descending Q, length L | `_priority_list` |
+| Holding time | Eq. (15): τ(n) = k(n − 1), k ∈ {0.01, 0.05, 0.1} s | `_hold` |
+| Overhearing suppression | Alg. 1, lines 4–13 | `_recv` / `_fire` |
+| Multipath suppression | Sec. IV-D, Fig. 4: shorten L if sink PDR > P_th, otherwise lengthen | end of each round in `run` |
+| Channel | Eq. (16)–(22): Urick A = l^κ a(f)^l, Thorp a(f), Rayleigh-averaged BPSK, p = (1 − p_e)^M | `link_success` |
+| Energy and lifetime | Eq. (33)–(40): tx = Ψ_t·M/μ; every neighbour pays Ψ_r·M/μ per overheard packet; Γ_net = min_i e_ini·T_run/E_i | `_transmit`, `result` |
+| Delay | Eq. (30): holding time + propagation (D/v0) | event times |
+| Topology | Sec. VII-A, Table II: 500 m³ cube; 100–500 sensors; 5 sources at the bottom layer; 5 static sinks on the surface; random-walk mobility at v = 1–5 m/s; R = 150 m; v0 = 1500 m/s; Ψ_t = 2 W; Ψ_r = 0.5 W | `Sim.__init__`, `_move` |
 
-**Reading this table:**
-- In this first setting, DQ-EVDR is **not significantly different** from QLFR: every confidence interval contains 0.
-- The one exception is a small, significant PDR loss at 150 nodes (−0.018 ± 0.016).
-- Delay is lower in 6 of 7 densities, but never significantly.
-- This is an honest negative first result. The brainstorming document explains why it happens and what to change.
+## 3. Baselines
 
-## 7. Numeric comparison with the paper (fill in when the full text is available)
+| Baseline | How implemented | Fidelity |
+|---|---|---|
+| DBR | Depth-greedy; holding time (2τ/δ)(R − Δd); suppression on overhearing (Yan et al., 2008) | Good |
+| EEDBR | Shallower forwarders; holding time increases as residual energy falls, plus a propagation term | **Approximate:** EEDBR paper not available, built from QLFR's description |
+| DVOR | Hop counts to the nearest sink by query flooding; forward if hop count decreases; hop-based holding time | **Approximate:** DVOR paper not available |
+| QELAR | Q-learning with r = −g − a1[c(s)+c(s_j)] + a2[d(s)+d(s_j)], link-aware Q, single next hop, up to 3 retransmissions | **Approximate:** QELAR paper not available; constants assumed |
 
-| Paper figure / table | Metric | Paper value | Our value (same parameters) | Difference |
+## 4. Parameters the paper does not report (assumed or calibrated)
+
+| Parameter | Value used | How chosen |
+|---|---|---|
+| Learning rate α | 0.5 | Assumed |
+| Packet size M, data rate μ | 500 bits, 10 kbit/s | Assumed |
+| Frequency f, spreading factor κ, Eb/N0 | 10 kHz, 1.5, 63 dB | Chosen so link success is 0.98 at 50 m, 0.94 at 100 m and 0.89 at 150 m |
+| Initial energy e_ini | 1000 J | Assumed. The paper's lifetime formula (Eq. 39–40) is used, so no node dies mid-run. |
+| Traffic | 100 rounds × 5 sources (500 packets), 10 s per round | Assumed |
+| Initial list length L, cap | 3, 8 | Assumed |
+| P_th (multipath suppression threshold) | 0.90 | **Calibrated:** best match of the lifetime trend (Section 6) |
+
+## 5. Figures (paper vs ours)
+
+All in `qlfr_repro/figures/`. Each figure shows the paper on the left (values read by eye from the PDF) and ours on the right (mean ± 95% CI over 5 seeds).
+
+| Figure file | Reproduces |
+|---|---|
+| `paper_fig6_delay.png` | Fig. 6 |
+| `paper_fig7_lifetime.png` | Fig. 7 (normalised to QLFR at 100 nodes, because absolute units depend on unreported energy/traffic) |
+| `paper_fig8_pdr.png` | Fig. 8 |
+| `paper_fig9_qelar.png` | Fig. 9 |
+| `paper_fig10_delay_k.png` | Fig. 10 |
+| `paper_fig11_pdr_k.png` | Fig. 11 |
+| `paper_fig12_energy_k.png` | Fig. 12 (normalised) |
+| `paper_fig13_pdr_v.png` | Fig. 13 |
+| `paper_fig14_delay_v.png` | Fig. 14 |
+| `paper_fig15_energy_v.png` | Fig. 15 (normalised) |
+| `paper_dqevdr_vs_qlfr.png` | Our extension vs QLFR |
+
+## 6. Numbers
+
+The full paper-vs-ours tables for every figure are in `qlfr_repro/results/paper_comparison.md`. Key rows follow.
+
+### Fig. 6: delay (s), k = 0.05 s, v = 3 m/s
+
+| Nodes | DBR paper | DBR ours | QLFR paper | QLFR ours | Diff (QLFR) |
+|---|---|---|---|---|---|
+| 100 | 0.720 | 0.779 | 0.510 | 0.515 | +0.005 |
+| 200 | 0.620 | 0.610 | 0.455 | 0.472 | +0.017 |
+| 300 | 0.560 | 0.565 | 0.445 | 0.463 | +0.018 |
+| 400 | 0.540 | 0.525 | 0.445 | 0.452 | +0.007 |
+| 500 | 0.510 | 0.497 | 0.440 | 0.461 | +0.021 |
+
+### Fig. 10: QLFR delay (s) vs k
+
+| Nodes | k=0.01 paper | ours | k=0.05 paper | ours | k=0.1 paper | ours |
+|---|---|---|---|---|---|---|
+| 100 | 0.450 | 0.455 | 0.510 | 0.515 | 0.530 | 0.538 |
+| 300 | 0.405 | 0.424 | 0.440 | 0.463 | 0.475 | 0.491 |
+| 500 | 0.400 | 0.418 | 0.440 | 0.461 | 0.475 | 0.497 |
+
+### Fig. 7: lifetime normalised to QLFR at 100 nodes
+
+| Nodes | DBR paper | DBR ours | QLFR paper | QLFR ours | QLFR/DBR paper | QLFR/DBR ours |
+|---|---|---|---|---|---|---|
+| 100 | 0.86 | 0.76 | 1.00 | 1.00 | 1.16 | 1.32 |
+| 300 | 0.32 | 0.21 | 2.11 | 1.17 | 6.7 | 5.7 |
+| 500 | 0.20 | 0.13 | 2.36 | 1.36 | 11.8 | 10.1 |
+
+Absolute values (ours): QLFR rises from 11,308 s to 15,394 s; DBR falls from 8,550 s to 1,526 s (100 → 500 nodes).
+
+### Fig. 8: PDR
+
+| Nodes | DBR paper | DBR ours | QLFR paper | QLFR ours |
 |---|---|---|---|---|
-| (paper Fig. ?) | End-to-end delay vs nodes | — | — | — |
-| (paper Fig. ?) | Network lifetime | — | — | — |
-| (paper Fig. ?) | Energy consumption | — | — | — |
-| (paper Fig. ?) | Packet delivery ratio | — | — | — |
+| 100 | 0.885 | 0.912 | 0.905 | 0.898 |
+| 300 | 1.000 | 1.000 | 0.973 | 0.901 |
+| 500 | 1.000 | 1.000 | 0.970 | 0.902 |
+
+### Why QLFR's PDR is 0.90, not 0.97 (P_th sensitivity, `results/paper_pth_sensitivity.md`)
+
+| P_th | Nodes | PDR | Delay (s) | Lifetime (s) |
+|---|---|---|---|---|
+| 0.90 | 100 / 300 / 500 | 0.897 / 0.901 / 0.900 | 0.504 / 0.455 / 0.466 | 10,614 / 13,827 / 15,786 |
+| 0.97 | 100 / 300 / 500 | 0.931 / 0.967 / 0.970 | 0.498 / 0.459 / 0.472 | 9,299 / 6,985 / 5,985 |
+
+- QLFR's multipath suppression drives the delivery ratio towards P_th. With P_th = 0.97, our PDR **matches the paper's 0.97** and delay is unchanged, but lifetime then falls with density.
+- No single P_th reproduces both the paper's PDR and its rising lifetime. This points to other unreported settings that change the energy balance: traffic load, packet duration, battery size and the initial list length.
+- We chose P_th = 0.90 to reproduce the paper's central lifetime claim.
+
+### Fig. 9: QLFR / QELAR (v = 1 m/s)
+
+| Nodes | Lifetime paper | Lifetime ours | Delay paper | Delay ours |
+|---|---|---|---|---|
+| 200 | 0.80 | 0.28 | 0.78 | 0.73 |
+| 250 | 0.85 | 0.32 | 0.74 | 0.73 |
+| 300 | 0.92 | 0.31 | 0.73 | 0.73 |
+
+## 7. Our extension in the paper's setting (DQ-EVDR vs QLFR)
+
+DQ-EVDR adds three things to QLFR:
+1. A link-quality cost learned from noisy hello receptions.
+2. A void-node cost.
+3. Double Q-learning.
+
+| Nodes | PDR QLFR | PDR DQ-EVDR | Delay QLFR (s) | Delay DQ-EVDR (s) | Lifetime QLFR (s) | Lifetime DQ-EVDR (s) |
+|---|---|---|---|---|---|---|
+| 100 | 0.898 ± 0.007 | 0.894 ± 0.021 | 0.515 | 0.542 | 11,308 | 10,626 |
+| 300 | 0.901 ± 0.004 | 0.902 ± 0.004 | 0.463 | 0.523 | 13,244 | 8,941 |
+| 500 | 0.902 ± 0.004 | 0.900 ± 0.001 | 0.461 | 0.526 | 15,394 | 8,880 |
+
+In this setting DQ-EVDR is **worse** than QLFR: delay is about 0.06 s higher, and lifetime is up to 42% lower at high density, while PDR is the same. This is an honest negative result for the first design. `02_brainstorming.md` analyses the causes and the redesign.
 
 ## 8. Reproduce
 
 ```bash
 cd qlfr_repro
 pip install numpy matplotlib pytest
-python3 -m pytest -q tests
-python3 experiments.py
-python3 plots.py
+python3 -m pytest -q tests          # 9 tests
+python3 paper_experiments.py        # 435 runs, about 8 min on 4 cores
+python3 paper_plots.py              # figures/paper_*.png and results/paper_comparison.md
+python3 paper_sensitivity.py        # P_th sensitivity
 ```
 
-The density sweep takes about 1 minute on 4 cores; the lifetime and learning runs take about 15 s.
+The earlier abstract-only prototype (`uwsim/network.py`, `experiments.py`, `plots.py`; 1000 m³ setting) is kept for reference but has been superseded by this report.
