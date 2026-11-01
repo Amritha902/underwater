@@ -1,3 +1,5 @@
 {"name": "LAQR (rho=0.98)", "protocol": "lq_al", "beta": 0.05, "rho": 0.98,
  "alt_name": "LAQR-HR (rho=0.99)", "alt_rho": 0.99,
- "selected_by": "tune_final.py on seeds 100-104: feasible = dPDR >= -0.005 vs QLFR(P_th=0.90) on sigma 0/4/8 dB; max mean lifetime ratio"}
+ "selected_by": "tune_final.py on seeds 100-104: feasible = dPDR >= -0.005 vs QLFR(P_th=0.90) on sigma 0/4/8 dB; max mean lifetime ratio",
+ "revision": "rho=0.98 violated the PDR constraint on evaluation seeds 0-9 at sigma=8 dB (-0.020 +/- 0.010). Final protocol uses rho=0.99, confirmed on fresh seeds 200-209 (confirm_final.py).",
+ "final": {"name": "LAQR", "protocol": "lq_al", "beta": 0.05, "rho": 0.99}}

@@ -41,3 +41,11 @@ def test_v2_variants_and_adaptive_list():
     sim.P[0][:] = 0.5
     sim.P[1][:] = 0.5
     assert len(sim._priority_list(s)) >= 3          # weak links need more candidates
+
+
+def test_final_laqr_config_runs():
+    import json, os
+    from uwsim.paper_sim import Sim, PaperConfig
+    cfg = json.load(open(os.path.join(os.path.dirname(__file__), "..", "results", "final_config.json")))["final"]
+    r = Sim(PaperConfig(n_sensors=150, rounds=15, lq_beta=cfg["beta"], rho=cfg["rho"]), cfg["protocol"], 0).run()
+    assert 0 < r["pdr"] <= 1
