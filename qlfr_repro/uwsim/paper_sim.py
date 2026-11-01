@@ -59,6 +59,8 @@ class PaperConfig:
     lq_beta: float = 0.2           # EWMA rate for p_hat / trap estimates
     lq_prior: float = 0.9          # prior link success before any sample
     rho: float = 0.99              # per-hop reliability target for adaptive list length; tuned
+    # harsh-channel extension (not in the QLFR paper): log-normal shadowing redrawn every round
+    shadow_db: float = 0.0
 
 
 # Ablation variants: protocol name -> (link quality, double Q, adaptive list, trap penalty)
@@ -76,10 +78,10 @@ def thorp_db_per_km(f):
     return 2.75e-4 * f2 + 44 * f2 / (4100 + f2) + 0.11 * f2 / (1 + f2) + 1e-3     # Eq. (17)
 
 
-def link_success(dist_m, cfg: PaperConfig):
+def link_success(dist_m, cfg: PaperConfig, extra_loss_db=0.0):
     """Eq. (16)-(22): Urick attenuation, Rayleigh-averaged BPSK BER, p = (1 - pe)^M."""
     d = np.maximum(dist_m, 1.0)
-    att_db = 10 * cfg.kappa * np.log10(d) + (d / 1000.0) * thorp_db_per_km(cfg.f_khz)
+    att_db = 10 * cfg.kappa * np.log10(d) + (d / 1000.0) * thorp_db_per_km(cfg.f_khz) + extra_loss_db
     snr = 10 ** ((cfg.eb_n0_db - att_db) / 10)                                       # Eq. (18)
     pe = 0.5 * (1 - np.sqrt(snr / (1 + snr)))                                         # Eq. (21)
     return (1 - pe) ** cfg.M                                                          # Eq. (22)
@@ -130,7 +132,12 @@ class Sim:
         diff = self.pos[:, None, :] - self.pos[None, :, :]
         self.dist = np.linalg.norm(diff, axis=-1)
         self.adj = (self.dist <= c.R) & ~np.eye(self.N, dtype=bool)
-        self.p = link_success(self.dist, c)
+        if c.shadow_db > 0:
+            x = self.rng.normal(0.0, c.shadow_db, size=self.dist.shape)
+            x = (x + x.T) / math.sqrt(2)                  # symmetric links, std stays shadow_db
+            self.p = link_success(self.dist, c, x)
+        else:
+            self.p = link_success(self.dist, c)
         self.depth = self.pos[:, 2].copy()
         if getattr(self, "v2", None):
             self.last_seq[~self.adj] = -1                  # neighbour timeout: forget lost links
