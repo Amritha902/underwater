@@ -96,7 +96,7 @@ What changes with carrier sensing:
 - **Conclusions are unchanged.** LAQR wins on every metric in the desync scenario, at every density; its delivery gain widens from +0.081 to +0.106. In the sync scenario it still loses delivery, but the gap narrows from −0.34 to −0.25.
 - **Carrier sensing helps LAQR and slightly hurts QLFR.**
   - LAQR in sync: 0.264 → 0.320. LAQR in desync: 0.546 → 0.544, no change.
-  - QLFR: 0.465 → 0.439 (desync) and 0.604 → 0.574 (sync), with about 0.1–0.2 s more delay.
+  - QLFR: 0.465 → 0.439 (desync) and 0.604 → 0.574 (sync), with 0.13–0.24 s more delay.
   - Backoff delays QLFR's many redundant copies. Those copies then arrive after the holding-time order they were meant to follow, so suppression works less well.
 - **Absolute delivery barely improves.** Propagation over 150 m takes up to 0.1 s, about four times the 25 ms packet airtime. A node therefore often senses the channel as idle while another transmission is still on its way: the classic reason carrier sensing works poorly underwater. Collisions remain the main cause of loss, and the beacon-vs-data estimation gap in Section 4 (item 3) still applies.
 
