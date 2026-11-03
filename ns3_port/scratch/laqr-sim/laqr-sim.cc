@@ -128,6 +128,9 @@ struct Params
     bool ackLearn{false}; // superseded by ackMode, kept for CLI compatibility
     double ackWait{1.0}, ackBeta{0.1};
     int ackMode{0};
+    std::string mac{"aloha"}; // aloha | cw
+    uint32_t cw{10}, maxAttempts{20};
+    double cwSlot{0.02};
     uint32_t dataBytes{63}, helloBytes{30}; // data ~ 500 bits as in the Python model; hello = header only
     double txPowerDb{114}, rxThreshDb{10}; // 114 dB re uPa at 40 kHz: link cutoff 150-175 m (calibrated)
     double fcHz{40000}, bwHz{20000}, rateBps{20000};
@@ -251,7 +254,15 @@ LaqrSim::Build()
     uan.SetPhy("ns3::UanPhyGen", "PerModel", StringValue("ns3::UanPhyPerCommonModes"), "SupportedModes",
                UanModesListValue(modes), "TxPower", DoubleValue(P.txPowerDb), "RxThreshold",
                DoubleValue(P.rxThreshDb));
-    uan.SetMac("ns3::UanMacAloha");
+    if (P.mac == "cw")
+    {
+        // carrier sense + contention-window backoff (ns-3 UanMacCw); single-packet MAC buffer
+        uan.SetMac("ns3::UanMacCw", "CW", UintegerValue(P.cw), "SlotTime", TimeValue(Seconds(P.cwSlot)));
+    }
+    else
+    {
+        uan.SetMac("ns3::UanMacAloha");
+    }
     Ptr<UanChannel> ch = CreateObject<UanChannel>();
     ch->SetPropagationModel(CreateObject<UanPropModelThorp>());
     ch->SetNoiseModel(CreateObject<UanNoiseModelDefault>());
@@ -369,8 +380,8 @@ LaqrSim::Transmit(uint32_t i, Ptr<Packet> pkt, uint32_t attempt, bool isData)
         S[i].txseq++;
         return;
     }
-    sendFails++; // PHY busy transmitting (half duplex): retry after one packet time
-    if (attempt < 20)
+    sendFails++; // MAC/PHY cannot take the packet now (ALOHA: own TX; CW: backoff pending): retry later
+    if (attempt < P.maxAttempts)
     {
         Simulator::Schedule(Seconds(P.dataBytes * 8.0 / P.rateBps + 1e-3), &LaqrSim::Transmit, this, i, pkt,
                             attempt + 1, isData);
@@ -749,6 +760,10 @@ main(int argc, char* argv[])
     cmd.AddValue("wLq", "LAQR link-quality weight", P.wLq);
     cmd.AddValue("prior", "LAQR prior link success", P.prior);
     cmd.AddValue("ackLearn", "LAQR: also learn p_hat from overhearing the top candidate forward", P.ackLearn);
+    cmd.AddValue("mac", "MAC protocol: aloha | cw (UanMacCw)", P.mac);
+    cmd.AddValue("cw", "UanMacCw contention window (slots)", P.cw);
+    cmd.AddValue("cwSlot", "UanMacCw slot time (s)", P.cwSlot);
+    cmd.AddValue("maxAttempts", "routing-layer retries when the MAC refuses a packet", P.maxAttempts);
     cmd.AddValue("ackMode", "0 off, 1 per-link samples, 2 node-level calibration of p_hat", P.ackMode);
     cmd.AddValue("ackBeta", "EWMA rate of the node-level calibration", P.ackBeta);
     cmd.AddValue("ackWait", "time to wait for the top candidate's forward (s)", P.ackWait);
