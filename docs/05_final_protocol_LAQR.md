@@ -84,7 +84,7 @@ The revision is reported openly. ρ = 0.99 was chosen after seeing the evaluatio
 - **Sparse networks under heavy shadowing:** at 100 nodes and σ = 8 dB, LAQR delivers about 0.81 against QLFR's 0.87 (see the figure). Per-hop reliability cannot compensate when few candidates exist. A fallback to a longer list when the candidate set is small is a natural fix and future work.
 - Simulation is in Python with no MAC collisions. Several QLFR parameters the paper doesn't report are assumed or calibrated (`01_…`, Section 4). EEDBR, DVOR and QELAR are approximations.
 - Shadowing is our own stress model, not part of the QLFR paper.
-- **Recommended next validation:** port QLFR and LAQR to ns-3 (UAN module / Aqua-Sim FG) and repeat Figs. 6–15 and the shadowing scenarios.
+- **ns-3 validation (done, `06_ns3_port.md`):** over ns-3's UAN stack with an ALOHA MAC, LAQR beats QLFR on delivery (+0.081), delay (−0.44 s) and lifetime (1.24×) when sources are desynchronised. When all sources transmit within 0.5 s, it loses delivery (−0.34): beacon-based p̂ misses correlated data-time collisions. Next: repeat with a collision-avoiding MAC and on Aqua-Sim FG.
 
 ## 4. Proposed paper framing
 

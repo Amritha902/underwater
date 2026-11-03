@@ -118,16 +118,19 @@ struct Params
 {
     std::string protocol{"qlfr"}; // qlfr | laqr
     uint32_t nSensors{100}, nSources{5}, nSinks{5}, rounds{50}, seed{1};
-    double area{500}, R{150}, speed{3}, roundS{10}, helloWindow{6.0}, dataJitter{0.5}, k{0.05};
-    uint32_t freshRounds{3}, helloEvery{1};
+    double area{500}, R{150}, speed{3}, roundS{10}, helloWindow{6.0}, dataJitter{3.5}, k{0.15};
+    uint32_t freshRounds{1}, helloEvery{1};
     double gamma{0.8}, alpha{0.5}, eIni{1000}, psiT{2}, psiR{0.5};
     double pdrTh{0.90};
     uint32_t listLen0{3}, listLenMax{8};
     double beta{0.05}, rho{0.99}, wLq{0.25}, prior{0.9};
     bool resetP{true};
+    bool ackLearn{false}; // superseded by ackMode, kept for CLI compatibility
+    double ackWait{1.0}, ackBeta{0.1};
+    int ackMode{0};
     uint32_t dataBytes{63}, helloBytes{30}; // data ~ 500 bits as in the Python model; hello = header only
-    double txPowerDb{120}, rxThreshDb{10}; // 120 dB re uPa: effective range 150-175 m (calibrated)
-    double fcHz{10000}, bwHz{10000}, rateBps{10000};
+    double txPowerDb{114}, rxThreshDb{10}; // 114 dB re uPa at 40 kHz: link cutoff 150-175 m (calibrated)
+    double fcHz{40000}, bwHz{20000}, rateBps{20000};
 };
 
 struct Nbr
@@ -150,6 +153,8 @@ struct NodeState
     std::map<uint32_t, double> Q;
     std::set<uint64_t> forwarded;
     std::map<uint64_t, EventId> held;
+    double ackRate{1.0}, headRate{1.0}; // node-level EWMA: observed vs predicted top-candidate success
+    std::set<std::pair<uint64_t, uint32_t>> heardFwd; // (packet, forwarder) overheard by this node
 };
 
 // ------------------------------------------------------------------------------------------ simulation
@@ -173,6 +178,7 @@ class LaqrSim
     std::vector<NodeState> S;
     std::map<Ptr<NetDevice>, uint32_t> devIndex;
     uint32_t round{0}, listLen{3};
+    double headOut{0}, listSum{0}, headDist{0}, candDist{0}, headP{0};
     uint32_t gen{0}, dataTx{0}, helloTx{0}, sendFails{0}, helloRx{0}, dataRx{0}, candRx{0}, voidDrops{0};
     std::map<uint64_t, double> t0, delivered;
 
@@ -213,6 +219,8 @@ class LaqrSim
     void Fire(uint32_t j, uint64_t key);
     bool Receive(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto, const Address& from);
     void LearnLink(Nbr& n, double ok);
+    void CheckAck(uint32_t i, uint64_t key, uint32_t j0);
+    uint32_t ackOk{0}, ackFail{0};
 };
 
 void
@@ -439,7 +447,12 @@ LaqrSim::PriorityList(uint32_t i)
         for (auto& [q, j] : c)
         {
             out.push_back(j);
-            miss *= 1.0 - std::clamp(S[i].nbr[j].p, 0.0, 1.0);
+            double pj = std::clamp(S[i].nbr[j].p, 0.0, 1.0);
+            if (P.ackMode == 2) // scale beacon-based estimates by the observed/predicted data-plane success
+            {
+                pj *= std::min(1.0, S[i].ackRate / std::max(1e-3, S[i].headRate));
+            }
+            miss *= 1.0 - pj;
             if (1.0 - miss >= P.rho || out.size() >= P.listLenMax)
             {
                 break;
@@ -498,11 +511,26 @@ LaqrSim::SendData(uint32_t i, uint32_t src, uint32_t pktId)
         }
         return; // void: no shallower neighbour
     }
+    listSum += h.plist.size();
+    headDist += CalculateDistance(S[i].mob->GetPosition(), S[h.plist[0]].mob->GetPosition());
+    headOut += CalculateDistance(S[i].mob->GetPosition(), S[h.plist[0]].mob->GetPosition()) > 160;
+    headP += S[i].nbr[h.plist[0]].p;
     uint32_t pay = P.dataBytes > h.GetSerializedSize() ? P.dataBytes - h.GetSerializedSize() : 0;
     Ptr<Packet> pkt = Create<Packet>(pay);
     pkt->AddHeader(h);
     dataTx++;
     Transmit(i, pkt, 0, true);
+    if (P.ackLearn && P.ackMode == 0)
+    {
+        P.ackMode = 1;
+    }
+    if (P.ackMode > 0 && P.protocol == "laqr" && !S[h.plist[0]].sink)
+    {
+        // The top-ranked candidate has holding time 0 and is never suppressed, so whether it forwards
+        // is an unbiased (or, if the reverse link also fails, conservative) sample of this link.
+        uint64_t key = (uint64_t(src) << 32) | pktId;
+        Simulator::Schedule(Seconds(P.ackWait), &LaqrSim::CheckAck, this, i, key, h.plist[0]);
+    }
 }
 
 bool
@@ -544,6 +572,10 @@ LaqrSim::Receive(Ptr<NetDevice> dev, Ptr<const Packet> p, uint16_t, const Addres
     }
     dataRx++;
     uint64_t key = (uint64_t(h.src) << 32) | h.pktId;
+    if (P.ackMode > 0)
+    {
+        S[j].heardFwd.insert({key, s});
+    }
     auto it = S[j].held.find(key);
     if (it != S[j].held.end())
     {
@@ -568,9 +600,24 @@ LaqrSim::Receive(Ptr<NetDevice> dev, Ptr<const Packet> p, uint16_t, const Addres
         return true; // not a candidate (Alg. 1, lines 4-5)
     }
     candRx++;
+    candDist += CalculateDistance(S[j].mob->GetPosition(), S[s].mob->GetPosition());
     double tau = P.k * double(pos - h.plist.begin()); // Eq. (15)
     S[j].held[key] = Simulator::Schedule(Seconds(tau), &LaqrSim::Fire, this, j, key);
     return true;
+}
+
+void
+LaqrSim::CheckAck(uint32_t i, uint64_t key, uint32_t j0)
+{
+    bool ok = S[i].heardFwd.count({key, j0}) > 0;
+    (ok ? ackOk : ackFail)++;
+    if (P.ackMode == 1)
+    {
+        LearnLink(S[i].nbr[j0], ok ? 1.0 : 0.0);
+        return;
+    }
+    S[i].ackRate += P.ackBeta * ((ok ? 1.0 : 0.0) - S[i].ackRate);
+    S[i].headRate += P.ackBeta * (std::clamp(S[i].nbr[j0].p, 0.0, 1.0) - S[i].headRate);
 }
 
 void
@@ -590,6 +637,7 @@ LaqrSim::EndRound()
 {
     for (auto& s : S)
     {
+        s.heardFwd.clear();
         for (auto& [k, e] : s.held)
         {
             e.Cancel();
@@ -631,7 +679,9 @@ LaqrSim::Report() const
               << (delivered.empty() ? NAN : delay / delivered.size()) << "," << used << "," << minLife << ","
               << double(dataTx) / std::max(gen, 1u) << "," << helloTx << "," << sendFails << std::endl;
     std::cerr << "debug helloRx=" << helloRx << " dataRx=" << dataRx << " candRx=" << candRx
-              << " voidDrops=" << voidDrops << " gen=" << gen << std::endl;
+              << " voidDrops=" << voidDrops << " gen=" << gen << " meanList=" << listSum / std::max(1u, dataTx)
+              << " headDist=" << headDist / std::max(1u, dataTx) << " headP=" << headP / std::max(1u, dataTx)
+              << " candDist=" << candDist / std::max(1u, candRx) << " headOut=" << headOut / std::max(1u, dataTx) << " ackOk=" << ackOk << " ackFail=" << ackFail << std::endl;
 }
 
 // ------------------------------------------------------------------------------------------ calibration
@@ -690,12 +740,18 @@ main(int argc, char* argv[])
     cmd.AddValue("rounds", "packet rounds", P.rounds);
     cmd.AddValue("seed", "random seed / run", P.seed);
     cmd.AddValue("speed", "random-walk speed (m/s)", P.speed);
+    cmd.AddValue("dataJitter", "max per-source data start jitter (s)", P.dataJitter);
+    cmd.AddValue("roundS", "round length (s)", P.roundS);
     cmd.AddValue("k", "holding-time step (s)", P.k);
     cmd.AddValue("pdrTh", "QLFR multipath-suppression threshold", P.pdrTh);
     cmd.AddValue("beta", "LAQR link EWMA rate", P.beta);
     cmd.AddValue("rho", "LAQR per-hop reliability target", P.rho);
     cmd.AddValue("wLq", "LAQR link-quality weight", P.wLq);
     cmd.AddValue("prior", "LAQR prior link success", P.prior);
+    cmd.AddValue("ackLearn", "LAQR: also learn p_hat from overhearing the top candidate forward", P.ackLearn);
+    cmd.AddValue("ackMode", "0 off, 1 per-link samples, 2 node-level calibration of p_hat", P.ackMode);
+    cmd.AddValue("ackBeta", "EWMA rate of the node-level calibration", P.ackBeta);
+    cmd.AddValue("ackWait", "time to wait for the top candidate's forward (s)", P.ackWait);
     cmd.AddValue("resetP", "reset p_hat when a neighbour times out", P.resetP);
     cmd.AddValue("txPowerDb", "UanPhyGen TxPower (dB re uPa)", P.txPowerDb);
     cmd.AddValue("helloWindow", "hello beacon window per round (s)", P.helloWindow);
