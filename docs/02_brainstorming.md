@@ -1,5 +1,7 @@
 # Brainstorming: What We Build on Top of QLFR
 
+> **Superseded (3 Nov 2026):** this brainstorm led to DQ-EVDR v2, which the experiments in `03_…` and `04_…` replaced with LAQR (`05_…`). Kept as a record of the reasoning.
+
 **Date:** 1 Nov 2026. It builds on `01_base_paper_reimplementation.md` (faithful QLFR reproduction).
 
 ## 1. What the reproduction taught us

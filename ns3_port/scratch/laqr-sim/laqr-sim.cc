@@ -118,7 +118,7 @@ struct Params
 {
     std::string protocol{"qlfr"}; // qlfr | laqr
     uint32_t nSensors{100}, nSources{5}, nSinks{5}, rounds{50}, seed{1};
-    double area{500}, R{150}, speed{3}, roundS{10}, helloWindow{6.0}, dataJitter{3.5}, k{0.15};
+    double area{500}, R{150}, speed{3}, roundS{20}, helloWindow{6.0}, dataJitter{3.5}, k{0.15};
     uint32_t freshRounds{1}, helloEvery{1};
     double gamma{0.8}, alpha{0.5}, eIni{1000}, psiT{2}, psiR{0.5};
     double pdrTh{0.90};
@@ -128,6 +128,7 @@ struct Params
     bool ackLearn{false}; // superseded by ackMode, kept for CLI compatibility
     double ackWait{1.0}, ackBeta{0.1};
     int ackMode{0};
+    bool cutHolds{false}; // cancel pending forwards at round end (true reproduces the flawed first runs)
     std::string mac{"aloha"}; // aloha | cw
     uint32_t cw{10}, maxAttempts{20};
     double cwSlot{0.02};
@@ -223,7 +224,7 @@ class LaqrSim
     bool Receive(Ptr<NetDevice> dev, Ptr<const Packet> pkt, uint16_t proto, const Address& from);
     void LearnLink(Nbr& n, double ok);
     void CheckAck(uint32_t i, uint64_t key, uint32_t j0);
-    uint32_t ackOk{0}, ackFail{0};
+    uint32_t ackOk{0}, ackFail{0}, holdsCut{0}, lateDeliv{0};
 };
 
 void
@@ -259,6 +260,28 @@ LaqrSim::Build()
         // carrier sense + contention-window backoff (ns-3 UanMacCw); single-packet MAC buffer
         uan.SetMac("ns3::UanMacCw", "CW", UintegerValue(P.cw), "SlotTime", TimeValue(Seconds(P.cwSlot)));
     }
+    else if (P.mac == "rc")
+    {
+        // Reservation-channel MAC (RTS/CTS to a gateway). Included only to demonstrate that it cannot
+        // carry broadcast anypath routing: UanMacRc unicasts all data to its associated gateway and
+        // passes up only packets addressed to itself. Sinks run the gateway MAC (UanMacRcGw).
+        // UanMacRc requires the dual-channel PHY (data on Phy1, reservation control on Phy2),
+        // configured as in ns-3's src/uan/examples/uan-rc-example.cc
+        // UanMacRc starts at rate index 10 (m_currentRate(10)), so each PHY gets 11 copies of its mode.
+        UanModesList data, ctrl;
+        UanTxMode cmode = UanTxModeFactory::CreateMode(UanTxMode::PSK, P.rateBps, P.rateBps, P.fcHz / 2,
+                                                       P.bwHz / 4, 2, "BPSK-ctrl");
+        for (int r = 0; r < 11; ++r)
+        {
+            data.AppendMode(mode);
+            ctrl.AppendMode(cmode);
+        }
+        uan.SetPhy("ns3::UanPhyDual", "SupportedModesPhy1", UanModesListValue(data), "SupportedModesPhy2",
+                   UanModesListValue(ctrl), "TxPowerPhy1", DoubleValue(P.txPowerDb), "TxPowerPhy2",
+                   DoubleValue(P.txPowerDb), "PerModelPhy1", StringValue("ns3::UanPhyPerCommonModes"),
+                   "PerModelPhy2", StringValue("ns3::UanPhyPerCommonModes"));
+        uan.SetMac("ns3::UanMacRc", "NumberOfRates", UintegerValue(11), "MaxPropDelay", TimeValue(Seconds(0.12)));
+    }
     else
     {
         uan.SetMac("ns3::UanMacAloha");
@@ -266,7 +289,24 @@ LaqrSim::Build()
     Ptr<UanChannel> ch = CreateObject<UanChannel>();
     ch->SetPropagationModel(CreateObject<UanPropModelThorp>());
     ch->SetNoiseModel(CreateObject<UanNoiseModelDefault>());
-    NetDeviceContainer devs = uan.Install(nodes, ch);
+    NetDeviceContainer devs;
+    if (P.mac == "rc")
+    {
+        NodeContainer sensors, sinks;
+        for (uint32_t i = 0; i < N; ++i)
+        {
+            (i < P.nSensors ? sensors : sinks).Add(nodes.Get(i));
+        }
+        devs.Add(uan.Install(sensors, ch));
+        UanHelper gw = uan;
+        gw.SetMac("ns3::UanMacRcGw", "NumberOfRates", UintegerValue(11), "NumberOfNodes", UintegerValue(P.nSensors), "MaxPropDelay",
+                  TimeValue(Seconds(0.12)));
+        devs.Add(gw.Install(sinks, ch));
+    }
+    else
+    {
+        devs = uan.Install(nodes, ch);
+    }
 
     BasicEnergySourceHelper esh;
     esh.Set("BasicEnergySourceInitialEnergyJ", DoubleValue(P.eIni));
@@ -598,6 +638,7 @@ LaqrSim::Receive(Ptr<NetDevice> dev, Ptr<const Packet> p, uint16_t, const Addres
         if (!delivered.count(key))
         {
             delivered[key] = Simulator::Now().GetSeconds() - t0[key];
+            lateDeliv += std::floor(Simulator::Now().GetSeconds() / P.roundS) > std::floor(t0[key] / P.roundS);
         }
         return true;
     }
@@ -651,9 +692,16 @@ LaqrSim::EndRound()
         s.heardFwd.clear();
         for (auto& [k, e] : s.held)
         {
-            e.Cancel();
+            holdsCut += e.IsPending();
+            if (P.cutHolds)
+            {
+                e.Cancel();
+            }
         }
-        s.held.clear();
+        if (P.cutHolds)
+        {
+            s.held.clear();
+        }
     }
     double pdr = gen ? double(delivered.size()) / gen : 0;
     if (pdr > P.pdrTh) // QLFR multipath suppression (Sec. IV-D)
@@ -692,7 +740,7 @@ LaqrSim::Report() const
     std::cerr << "debug helloRx=" << helloRx << " dataRx=" << dataRx << " candRx=" << candRx
               << " voidDrops=" << voidDrops << " gen=" << gen << " meanList=" << listSum / std::max(1u, dataTx)
               << " headDist=" << headDist / std::max(1u, dataTx) << " headP=" << headP / std::max(1u, dataTx)
-              << " candDist=" << candDist / std::max(1u, candRx) << " headOut=" << headOut / std::max(1u, dataTx) << " ackOk=" << ackOk << " ackFail=" << ackFail << std::endl;
+              << " candDist=" << candDist / std::max(1u, candRx) << " headOut=" << headOut / std::max(1u, dataTx) << " holdsCut=" << holdsCut << " lateDeliv=" << lateDeliv << " ackOk=" << ackOk << " ackFail=" << ackFail << std::endl;
 }
 
 // ------------------------------------------------------------------------------------------ calibration
@@ -760,7 +808,9 @@ main(int argc, char* argv[])
     cmd.AddValue("wLq", "LAQR link-quality weight", P.wLq);
     cmd.AddValue("prior", "LAQR prior link success", P.prior);
     cmd.AddValue("ackLearn", "LAQR: also learn p_hat from overhearing the top candidate forward", P.ackLearn);
-    cmd.AddValue("mac", "MAC protocol: aloha | cw (UanMacCw)", P.mac);
+    cmd.AddValue("nSinks", "number of surface sinks", P.nSinks);
+    cmd.AddValue("cutHolds", "cancel pending forwards at round end", P.cutHolds);
+    cmd.AddValue("mac", "MAC protocol: aloha | cw (UanMacCw) | rc (UanMacRc; cannot carry broadcast routing)", P.mac);
     cmd.AddValue("cw", "UanMacCw contention window (slots)", P.cw);
     cmd.AddValue("cwSlot", "UanMacCw slot time (s)", P.cwSlot);
     cmd.AddValue("maxAttempts", "routing-layer retries when the MAC refuses a packet", P.maxAttempts);

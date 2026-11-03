@@ -1,6 +1,6 @@
 # II. Related Work
 
-> **Draft v1 (31 Oct 2026).** Working title of the paper: *Double Q-Learning Based Energy- and Void-Aware Depth Routing for Underwater Acoustic Sensor Networks: An ns-3 Evaluation.*
+> **Draft v2 (3 Nov 2026; v1 of 31 Oct pitched DQ-EVDR, which our experiments replaced with LAQR).** Working title: *Link-Aware Adaptive Candidate Sets for Q-Learning Anypath Routing in Underwater Acoustic Sensor Networks.*
 > Reference numbers below are local to this section and map to `literature_survey.md` (the "Survey #" column in the reference list). Every factual claim is taken from the paper's abstract or metadata as returned by search. Items tagged **[TBC]** still need the exact title or author list checked against the publisher page before submission.
 
 Routing in underwater acoustic sensor networks (UASNs) is hard for three reasons. Acoustic links have low bandwidth and long propagation delay, nodes run on batteries that are difficult to recharge, and ocean currents keep moving nodes, so the topology changes all the time. This section reviews the five lines of work our protocol builds on: (A) classic geographic and depth-based routing, (B) energy-aware and void-aware extensions of those schemes, (C) fuzzy-logic and metaheuristic clustering approaches, (D) reinforcement-learning (RL) based routing, and (E) simulation tools and evaluation practice. It ends with (F) the research gap this paper addresses.
@@ -42,7 +42,9 @@ Two recent surveys [8], [30] confirm that learning-based protocols are now a mai
 
 **Learning at other layers.** RL is also being applied to MAC design. Examples are a deep-Q-learning MAC with power control [25] and a field study of whether deep-RL MAC protocols work in real sea trials [26]. Song *et al.* [27] proposed a digital-twin network architecture in which MARL helps make up for scarce real-world training data. These works suggest that complex deep models are hard to run on resource-limited acoustic nodes, which makes lightweight tabular learners attractive for per-node routing decisions.
 
-**The overestimation problem.** Every Q-learning router listed above updates its values with the *maximum* estimated value of the next state. Van Hasselt [5] showed that this max operator introduces a *positive bias* (overestimation) when rewards and transitions are stochastic. He proposed *Double Q-learning*, which keeps two estimators and separates choosing the action from evaluating it, and which still converges to the optimal policy. Underwater acoustic link quality changes a great deal over time because of multipath and Doppler effects [35]. A single Q-learning router can therefore become over-optimistic about a neighbour whose link has recently degraded, or that leads into a void. None of the UASN routing abstracts we reviewed report using a double estimator.
+**The overestimation problem.** Every Q-learning router listed above updates its values with the *maximum* estimated value of the next state. Van Hasselt [5] showed that this max operator introduces a *positive bias* (overestimation) when rewards and transitions are stochastic. He proposed *Double Q-learning*, which keeps two estimators and separates choosing the action from evaluating it, and which still converges to the optimal policy. Underwater acoustic link quality changes a great deal over time because of multipath and Doppler effects [35]. A single Q-learning router can therefore become over-optimistic about a neighbour whose link has recently degraded, or that leads into a void. None of the UASN routing abstracts we reviewed report using a double estimator. We tested this idea directly (Section VI) and found that, in anypath routing with smoothed link estimates, a double estimator does *not* reduce measured value bias; its apparent benefit under noisy links comes from slower estimator smoothing. We report this as a negative result.
+
+**Candidate-set size in opportunistic routing.** How many forwarders to include is a known trade-off: more candidates raise the chance that at least one receives the packet, but add duplicate transmissions and interference. EPA-based underwater schemes pick the forwarder set that maximises expected packet advancement, and a 2018 study showed that candidate-set size and location strongly affect path reliability [36]. In vehicular networks, PRO [37] chooses the *minimum* number of candidates that meets a delivery-ratio requirement between the sender and the candidate set. Link-quality estimation from beacon sequence numbers (ETX) [38] is standard in terrestrial sensor networks. As far as our search found, no Q-learning *anypath* UASN router sizes its candidate set per hop from link quality learned online; QLFR [39] adapts one global list length from end-to-end PDR.
 
 ## E. Simulation Tools and Evaluation Practice
 
@@ -60,26 +62,29 @@ Even so, evaluation practice varies widely. Of the RL routers above, QELAR used 
 | [1] | DBR (2008) | Greedy depth | No | No | — |
 | [3] | QELAR (2010) | Q-learning | Yes | Implicit | Aqua-Sim (ns-2) |
 | [4] | CARMA (2019) | Distributed RL, multi-path | Yes | Via multi-path | SUNSET + sea trial |
+| [39] | QLFR (2021) | Q-learning, anypath with holding time | Yes | No | Not stated **[TBC]** |
 | [16] | IM-RM-AHH-VBF (2025) | Rule-based, 3-hop verification | Yes | Yes (fixed rules) | Not stated |
 | [9] | APC-EEDBR (2025) | Depth + power control | Yes | Not stated | Not stated |
 | [10] | 3-D fuzzy routing (2025) | Fuzzy inference | Yes | Not stated | Not stated |
 | [28] | Fuzzy adaptive routing (2025, preprint) | Fuzzy inference | Yes | Not stated | **ns-3** |
 | [11] | Q-learning link-aware (2025) | Q-learning | Not stated | Not stated | Not stated |
 | [13] | DRL energy-efficient (2026) | Q-learning + clustering | Yes | Claimed | Not stated |
-| **Ours** | **DQ-EVDR** | **Double Q-learning** | **Yes** | **Learned void penalty** | **ns-3 (UAN / Aqua-Sim NG)** |
+| **Ours** | **LAQR** | **Q-learning + learned link quality** | **Yes** | **No (limitation)** | **Python + ns-3 (UAN)** |
 
 "Not stated" means the abstract or metadata we could access did not say. The full texts must be checked before submission.
 
 From this survey we identify three gaps:
 
-1. **Estimation bias.** Existing Q-learning UASN routers use single-estimator Q-learning, which tends to overestimate values when link quality is noisy [5]. As far as our survey found, no UASN routing protocol uses a double estimator.
-2. **Learned void avoidance.** Void handling in recent work relies on fixed geometric or hop-count rules [16], [17]. It is not part of what the router learns.
-3. **Reproducible ns-3 evaluation.** Recent RL routers are seldom evaluated in a common, open ns-3 setup alongside the classic DBR and VBF baselines, even though such tools exist [6], [7].
+1. **Candidate-set sizing in Q-learning anypath routing.** QLFR [39] and similar routers rank forwarders with Q-values but size the candidate list globally, from end-to-end PDR feedback. Per-hop sizing from learned link reliability exists in other settings (EPA-based UASN routing [36], VANETs [37]) but has not been combined with Q-learning anypath routing in UASNs.
+2. **Whether double estimators help UASN Q-routing.** Overestimation is often cited as a motivation for double estimators [5], but it has not been measured for UASN anypath routers.
+3. **Reproducible ns-3 evaluation with a real MAC.** Recent RL routers are seldom evaluated in a common, open ns-3 setup, even though such tools exist [6], [7]. Results from MAC-less simulators may not survive collisions.
 
-**Contributions.** To address these gaps, this paper:
-(i) proposes **DQ-EVDR**, a distributed Double Q-learning routing protocol whose reward combines depth progress, residual energy, link quality and a learned void penalty;
-(ii) uses Q-value-based holding times so that the best-ranked forwarder transmits first and lower-ranked copies are suppressed;
-(iii) implements the protocol in ns-3 and benchmarks it against DBR, VBF, a fuzzy-logic scheme and single-estimator Q-learning. The metrics are PDR, end-to-end delay, energy per delivered packet, network lifetime and void-encounter rate, measured under varying node density and mobility.
+**Contributions.** This paper:
+(i) proposes **LAQR**, which keeps QLFR's Q-learning and holding times, adds an ETX-style link-quality estimate from sequence numbers to the reward, and replaces QLFR's global multipath suppression with per-hop candidate sets sized to a reliability target ρ;
+(ii) gives an ablation showing that the adaptive candidate set carries the gain, and that Double Q-learning's apparent benefit under noisy links is explained by estimator smoothing rather than reduced bias (a negative result);
+(iii) evaluates QLFR and LAQR in a MAC-less Python simulator *and* in ns-3 with ALOHA and carrier-sense MACs. The ns-3 results expose a limitation: beacon-based link estimates miss correlated data-time collisions, so LAQR trades delivery for energy when the channel is collision-dominated.
+
+The novelty is incremental: each component (Q-learning anypath routing, ETX-style estimation, reliability-targeted candidate sets) has precedent. The contribution is their combination in UASN anypath routing, plus the ablation and the cross-simulator evaluation.
 
 ---
 
@@ -122,5 +127,9 @@ From this survey we identify three gaps:
 | [33] | 39 | Karami Benmaran and Taheri Javan, RL- and GAN-based routing for UWSNs, *Soft Comput. J.*, 2025. **[TBC: exact title]** |
 | [34] | 41 | Homaei *et al.*, "RL-RPL-UA," arXiv / JITEL, 2025 (Aqua-Sim implementation). **[TBC: exact title]** |
 | [35] | 116 | "Toward intelligent underwater acoustic systems: Systematic insights into channel estimation and modulation methods," *Electronics*, vol. 14, no. 15, art. 2953, 2025. doi: 10.3390/electronics14152953 **[TBC: authors]** |
+| [36] | — | "Path diversity improved opportunistic routing for underwater sensor networks," *Sensors*, vol. 18, no. 4, art. 1293, 2018. doi: 10.3390/s18041293 **[TBC: authors]** |
+| [37] | — | N. Li, J.-F. Martínez-Ortega, V. Hernández Díaz, and J. A. Sánchez Fernández, "Probability prediction-based reliable and efficient opportunistic routing algorithm for VANETs," *IEEE/ACM Trans. Netw.*, vol. 26, no. 4, pp. 1933–1947, 2018. doi: 10.1109/TNET.2018.2852220 |
+| [38] | — | D. S. J. De Couto, D. Aguayo, J. Bicket, and R. Morris, "A high-throughput path metric for multi-hop wireless routing," in *Proc. ACM MobiCom*, 2003. **[TBC: pages]** |
+| [39] | — | Y. Zhou, T. Cao, and W. Xiang, "Anypath routing protocol design via Q-learning for underwater sensor networks," *IEEE Internet Things J.*, vol. 8, no. 10, pp. 8173–8190, 2021. doi: 10.1109/JIOT.2020.3042901 |
 
 References [1]–[6] (the classic baselines and Double Q-learning) were checked separately by title search on 31 Oct 2026. [29], [31] and [32] are in the list for use in the Introduction and are not cited above.

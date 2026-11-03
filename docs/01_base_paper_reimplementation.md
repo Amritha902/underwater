@@ -2,13 +2,15 @@
 
 **Date:** 1 Nov 2026. **Code:** `qlfr_repro/` (Python).
 
+**Note:** the "paper" values in every comparison table were read by eye from the published plots (`qlfr_repro/paper_digitized.py`), with about ±2–5% of each axis range of reading error.
+
 **Base paper:** Y. Zhou, T. Cao, W. Xiang, "Anypath Routing Protocol Design via Q-Learning for Underwater Sensor Networks," *IEEE Internet of Things Journal*, 8(10), 8173–8190, 2021. doi:10.1109/JIOT.2020.3042901. The re-implementation follows the arXiv:2002.09623v1 full text (16 pages, read in full).
 
 ## 1. Summary
 
 | Paper figure | What it shows | Match |
 |---|---|---|
-| Fig. 6: end-to-end delay vs nodes | QLFR lowest; DBR falls with density | **Strong.** QLFR is within 0.005–0.022 s of the paper at all 9 densities; DBR within 0.06 s. |
+| Fig. 6: end-to-end delay vs nodes | QLFR lowest; DBR falls with density | **Strong for QLFR's own values:** within 0.005–0.022 s of the paper at all 9 densities; DBR within 0.06 s. **The ordering does not match:** our DVOR approximation (0.40–0.51 s) is *below* QLFR at every density, so "QLFR lowest" is not reproduced. Our DVOR is approximate (Section 3) and EEDBR is 0.06–0.12 s off. *(Corrected in the 3 Nov audit, `07_audit_and_novelty.md`.)* |
 | Fig. 10: delay vs k | Larger k gives longer delay | **Strong.** Same ordering; ours is within 0.005–0.04 s. |
 | Fig. 14: delay vs node speed | Speed has little impact | **Good.** Within 0.05 s everywhere. v = 1 m/s is within 0.01 s at 200–500 nodes; v = 5 m/s runs 0.03–0.04 s higher. |
 | Fig. 7: lifetime vs nodes | QLFR rises with density; DBR, EEDBR and DVOR fall | **Partial.** Same direction for QLFR, DBR and EEDBR. QLFR rises 1.36× (paper 2.36×). Our DVOR stays above QLFR up to 150 nodes. |
