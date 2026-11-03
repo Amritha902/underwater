@@ -7,7 +7,9 @@ import pandas as pd
 T975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
         19: 2.093, 29: 2.045, 49: 2.010}
 HERE = Path(__file__).resolve().parent
-df = pd.read_csv(HERE / "results" / "ns3_eval.csv")
+TAG = sys.argv[1] if len(sys.argv) > 1 else ""
+SUF = f"_{TAG}" if TAG else ""
+df = pd.read_csv(HERE / "results" / f"ns3_eval{SUF}.csv")
 METRICS = ["pdr", "delay", "lifetime", "energy_used", "tx_per_pkt"]
 NAMES = {"qlfr": "QLFR (P_th = 0.90)", "qlfr97": "QLFR (P_th = 0.97)", "laqr": "LAQR"}
 
@@ -19,7 +21,7 @@ def ci(x):
     return T975.get(len(x) - 1, 1.96) * x.std(ddof=1) / np.sqrt(len(x))
 
 
-out = ["# ns-3 evaluation: QLFR vs LAQR", "",
+out = [f"# ns-3 evaluation: QLFR vs LAQR (MAC: {'UanMacCw' if TAG == 'cw' else 'UanMacAloha'})", "",
        f"Runs: {len(df)} ({df.seed.nunique()} seeds x {df.nodes.nunique()} densities x "
        f"{df.protocol.nunique()} protocols x {df.scenario.nunique()} scenarios). Mean +/- 95% CI over seeds.", ""]
 for sc, g in df.groupby("scenario", sort=False):
@@ -53,7 +55,7 @@ for sc, g in df.groupby("scenario", sort=False):
                    f"{per.tr.mean():.2f} ± {ci(per.tr):.2f} |")
     out.append("")
 text = "\n".join(out)
-(HERE / "results" / "ns3_summary.md").write_text(text + "\n")
+(HERE / "results" / f"ns3_summary{SUF}.md").write_text(text + "\n")
 print(text)
 
 try:
@@ -74,6 +76,6 @@ try:
                 ax[r, c].set_xlabel("Number of nodes")
     ax[0, 0].legend(fontsize=8)
     fig.tight_layout()
-    fig.savefig(HERE / "results" / "ns3_eval.png", dpi=130)
+    fig.savefig(HERE / "results" / f"ns3_eval{SUF}.png", dpi=130)
 except Exception as e:  # plotting is optional
     print("plot skipped:", e, file=sys.stderr)

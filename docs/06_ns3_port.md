@@ -3,8 +3,8 @@
 **Date:** 3 Nov 2026.
 - **Code:** `ns3_port/scratch/laqr-sim/laqr-sim.cc` (one ns-3 program that runs both protocols); `ns3_port/build_ns3.sh` (fetches and builds ns-3.44 and links the program).
 - **Evaluation:** `ns3_port/run_eval.sh`, `ns3_port/report.py`.
-- **Results:** `ns3_port/results/ns3_eval.csv` (300 runs) and `ns3_port/results/ns3_summary.md`.
-- **Figure:** `ns3_port/results/ns3_eval.png`.
+- **Results (ALOHA MAC):** `ns3_port/results/ns3_eval.csv` (300 runs), `ns3_summary.md`, `ns3_eval.png`.
+- **Results (UanMacCw MAC):** `ns3_port/results/ns3_eval_cw.csv` (300 runs), `ns3_summary_cw.md`, `ns3_eval_cw.png`.
 
 The Python simulator (`qlfr_repro/`) has no MAC: transmissions never collide, and link loss comes only from the paper's Rayleigh/BPSK model. This port re-runs both protocols over ns-3's underwater acoustic stack, which has a real MAC (with collisions), propagation, noise and an energy model. The aim is to check whether the Python-sim conclusions in `05_final_protocol_LAQR.md` hold in ns-3.
 
@@ -15,7 +15,8 @@ The Python simulator (`qlfr_repro/`) has no MAC: transmissions never collide, an
 | Propagation | `UanPropModelThorp` | Thorp absorption, spreading factor 1.5 |
 | Noise | `UanNoiseModelDefault` | Default (wind and shipping) |
 | PHY | `UanPhyGen`, BPSK, `UanPhyPerCommonModes`, `UanPhyCalcSinrDefault` | 20 kbps, f_c = 40 kHz, B = 20 kHz, source level 114 dB re µPa, RX threshold 10 dB |
-| MAC | `UanMacAloha` | Pure ALOHA: no carrier sense and no ACKs. A send is retried by the routing layer only if the node's own PHY is busy transmitting. |
+| MAC | `UanMacAloha` (Sections 3.1–3.3) | Pure ALOHA: no carrier sense and no ACKs. A send is retried by the routing layer only if the node's own PHY is busy transmitting. |
+| MAC | `UanMacCw` (Section 3.4) | Carrier sense plus a random contention-window backoff (ns-3 defaults: CW = 10 slots, slot 20 ms). It has no ACKs and buffers one packet; the routing layer retries a refused send every packet time, up to 400 times. |
 | Energy | `AcousticModemEnergyModel` + `BasicEnergySource` | Ψ_t = 2 W, Ψ_r = 0.5 W, idle 0 W, E_ini = 1000 J (paper Table II) |
 | Mobility | Reflecting random walk, one step per round | v = 3 m/s, 10 s rounds; sources stay at the bottom layer and sinks stay at the surface |
 | Topology | 500 m cube; 100–500 sensors; 5 sources at the bottom; 5 surface sinks | Paper Table II |
@@ -71,6 +72,34 @@ LAQR is better at every density (100–500 nodes; see `ns3_summary.md`), and its
 
 In every ns-3 run, QLFR's end-to-end PDR stays below 0.90. Its global list length therefore stays at the cap of 8 for both P_th = 0.90 and P_th = 0.97, and the two settings give **identical** results. The P_th = 0.97 row in `ns3_summary.md` is kept only for completeness.
 
+### 3.4 Rerun with a carrier-sense MAC (`UanMacCw`)
+
+This is the same 300-run design: seeds 0–9, 100–500 nodes, both scenarios, and every other setting unchanged. The MAC settings are ns-3's defaults; only the retry limit (400) was set, on development seed 101.
+
+| Scenario | Protocol | PDR | Delay (s) | Lifetime (s) | Network energy (J) | Tx/packet |
+|---|---|---|---|---|---|---|
+| desync | QLFR (P_th = 0.90) | 0.439 ± 0.007 | 1.348 ± 0.017 | 31,410 ± 861 | 3,324 ± 39 | 18.4 ± 0.2 |
+| desync | **LAQR** | **0.544 ± 0.012** | **0.860 ± 0.011** | **38,958 ± 870** | **2,778 ± 28** | **7.5 ± 0.1** |
+| sync | QLFR (P_th = 0.90) | **0.574 ± 0.014** | 2.091 ± 0.042 | 28,980 ± 712 | 3,620 ± 47 | 24.4 ± 0.5 |
+| sync | LAQR | 0.320 ± 0.011 | 1.101 ± 0.016 | **45,301 ± 943** | **2,552 ± 27** | 5.3 ± 0.1 |
+
+**Paired LAQR − QLFR, by MAC:**
+
+| Scenario | MAC | ΔPDR | ΔDelay (s) | Lifetime ratio | Tx ratio |
+|---|---|---|---|---|---|
+| desync | ALOHA | +0.081 ± 0.012 | −0.436 ± 0.016 | 1.24 ± 0.01 | 0.42 |
+| desync | **UanMacCw** | **+0.106 ± 0.011** | −0.489 ± 0.019 | 1.24 ± 0.01 | 0.42 |
+| sync | ALOHA | −0.341 ± 0.013 | (not comparable) | 1.56 ± 0.02 | 0.22 |
+| sync | **UanMacCw** | **−0.254 ± 0.010** | (not comparable) | 1.56 ± 0.03 | 0.24 |
+
+What changes with carrier sensing:
+- **Conclusions are unchanged.** LAQR wins on every metric in the desync scenario, at every density; its delivery gain widens from +0.081 to +0.106. In the sync scenario it still loses delivery, but the gap narrows from −0.34 to −0.25.
+- **Carrier sensing helps LAQR and slightly hurts QLFR.**
+  - LAQR in sync: 0.264 → 0.320. LAQR in desync: 0.546 → 0.544, no change.
+  - QLFR: 0.465 → 0.439 (desync) and 0.604 → 0.574 (sync), with about 0.1–0.2 s more delay.
+  - Backoff delays QLFR's many redundant copies. Those copies then arrive after the holding-time order they were meant to follow, so suppression works less well.
+- **Absolute delivery barely improves.** Propagation over 150 m takes up to 0.1 s, about four times the 25 ms packet airtime. A node therefore often senses the channel as idle while another transmission is still on its way: the classic reason carrier sensing works poorly underwater. Collisions remain the main cause of loss, and the beacon-vs-data estimation gap in Section 4 (item 3) still applies.
+
 ## 4. What ns-3 shows that the Python simulator could not
 
 1. **Absolute delivery is much lower over an ALOHA MAC** (0.26–0.60 here, against 0.90–0.97 in Python), for both protocols.
@@ -101,7 +130,7 @@ In every ns-3 run, QLFR's end-to-end PDR stays below 0.90. Its global list lengt
 - The ns-3 results **support** LAQR's efficiency claim (fewer transmissions, longer lifetime, lower delay) in all cases.
 - They **support** its delivery claim when collisions are not bursty.
 - They show a **limitation**: LAQR's reliability target assumes independent link losses, and beacon-based estimates miss correlated data-time collisions. This should be stated alongside the sparse/shadowing limitation already in `05_…` (Section 3.4).
-- These ns-3 runs use pure ALOHA. A fair "full" evaluation should add at least one collision-avoiding MAC: for example ns-3's `UanMacCw` (CSMA-like), or Aqua-Sim FG's protocols.
+- The conclusions hold with both a pure-ALOHA MAC and a carrier-sense MAC (`UanMacCw`, Section 3.4). Because carrier sensing is weak at acoustic propagation delays, a handshake or scheduled MAC (e.g. ns-3's `UanMacRc`, or Aqua-Sim FG's protocols) is the remaining check. So is a traffic-aware LAQR list rule for synchronised traffic.
 
 ## 6. Reproduce
 
@@ -113,6 +142,8 @@ export LD_LIBRARY_PATH=/home/user/ns-3/build/lib
 #   -> laqr,100,0,3,0.532,0.789511,633.958,47812.4,6.84,5250,0  (matches results/ns3_eval.csv)
 ns3_port/run_eval.sh /home/user/ns-3 4          # 300 runs, about 45 min on 4 cores
 python3 ns3_port/report.py                      # tables + figure
+ns3_port/run_eval.sh /home/user/ns-3 4 cw --mac=cw --maxAttempts=400   # UanMacCw rerun -> results/ns3_eval_cw.csv
+python3 ns3_port/report.py cw                   # -> results/ns3_summary_cw.md, ns3_eval_cw.png
 ```
 
 **Output columns:**
